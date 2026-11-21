@@ -1,0 +1,24 @@
+[config] rate_limit=20 low_aging_ms=5000 wrr=5:3:1
+[shm] created /vswitch_stats, 2096 bytes
+[logger] started, writing to /tmp/vswitch.log
+[control] listening on /tmp/vswitch.sock
+switch ready on TCP 9300, 4 ports, rate_limit=20
+[port 0] host connected (fd=8)
+[port 1] host connected (fd=9)
+[port 1] removed, dropped=0 aged=0
+[port 1] host gone
+[port 0] removed, dropped=0 aged=0
+[port 0] host gone
+[signal] SIGHUP: reloading test_out/qos.conf
+[config] rate_limit=20 low_aging_ms=100 wrr=5:3:1
+[port 0] host connected (fd=10)
+[port 1] host connected (fd=8)
+[port 1] removed, dropped=0 aged=0
+[port 1] host gone
+[port 0] removed, dropped=0 aged=34
+[port 0] host gone
+
+[switch] signal 2 received, shutting down
+[control] stopped, socket removed
+[shm] unlinked /vswitch_stats
+[switch] shutdown complete

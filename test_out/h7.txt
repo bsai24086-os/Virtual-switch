@@ -1,0 +1,2 @@
+SPOOF cut off at 10
+SPOOF_DONE closed_by_switch=yes

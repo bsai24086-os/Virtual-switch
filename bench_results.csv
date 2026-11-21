@@ -1,0 +1,12 @@
+mode,threads,read_pct,mops
+global,1,95,12.589
+striped,1,95,13.027
+rwlock,1,95,13.310
+global,2,95,5.145
+striped,2,95,9.582
+rwlock,2,95,1.318
+global,4,95,4.929
+striped,4,95,17.528
+rwlock,4,95,.818
+global,8,95,2.066
+striped,8,95,12.035

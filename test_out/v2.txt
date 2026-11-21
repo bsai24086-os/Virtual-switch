@@ -1,0 +1,2 @@
+RECV total=25 H=0 N=25 L=0 hello=3 lastvlan=20 span_ms=2071 rate_1to3s=7.5/s
+SEQ=NNNNNNNNNNNNNNNNNNNNNNNNN

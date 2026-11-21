@@ -1,0 +1,12 @@
+switch
+host
+test_frame
+test_shm
+demo_switch
+swctl
+supervisor
+testhost
+bench_global
+bench_striped
+bench_rwlock
+*.o
