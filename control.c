@@ -30,7 +30,7 @@ static ControlContext g_ctx;
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    char   buf[CTRL_BUF_SIZE * 16];
+    char buf[CTRL_BUF_SIZE * 256];   /* 64 KB: room for 1024 MAC entries */
     size_t len;
 } Reply;
 

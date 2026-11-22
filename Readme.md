@@ -99,14 +99,45 @@ Reload without restarting: `kill -HUP <switch_pid>`.
 | `/tmp/vswitch.log` | Log file, written by the logger thread |
 | `/tmp/vswitch.sock` | Control socket for swctl |
 | `/dev/shm/vswitch_stats` | Shared-memory counters |
+| `/dev/shm/vswitch_mac` | Shared-memory MAC table (kept across a crash under the supervisor) |
+| `mac_dump.txt` | MAC table dump written on SIGUSR1, in the current directory |
+
+## Supervisor
+
+```
+./supervisor <tcp_port> <num_ports> [config_file]
+```
+
+Runs `./switch` with the same arguments and starts it again if it crashes.
+The switch is started with `VSWITCH_PERSIST=1`, so the new process attaches
+to the old shared-memory MAC table and keeps what it had learned. A clean
+exit (exit code 0, for example after Ctrl+C) ends the supervisor too. More
+than 5 crashes within 10 seconds also stops it.
+
+Try it: start `./supervisor 9000 4`, connect a host, run `pkill -9 -x switch`,
+then `./swctl show mac`. The table is still filled.
+
+## Benchmark
+
+The MAC table can be built with three lock designs (`MAC_LOCK_MODE` 0 = one
+global mutex, 1 = striped locks, 2 = read-write lock).
+
+```
+./bench.sh quick     # short run, checks that everything works
+./bench.sh           # full run, about 2 minutes, writes bench_results.csv
+python3 plot.py      # draws bench_results.png (needs matplotlib)
+```
 
 ## Tests
 
 ```
-./run_tests.sh                 # 68 checks on the normal build
+./final_test.sh                # everything below plus build, CLI and swctl checks (about 4 min)
+./final_test.sh full           # also TSan, valgrind and MAC aging (about 15 min)
+./run_tests.sh                 # 78 checks on the normal build
 ./run_tests.sh ./switch_tsan   # same checks under ThreadSanitizer
 VALGRIND=1 ./run_tests.sh      # same checks under valgrind
 make test_frame test_shm && ./test_frame && ./test_shm   # unit tests
+gcc -std=c11 -Wall -Wextra -Werror -g -O0 -DMAC_LOCK_MODE=1 -o test_mac test_mac.c mac_table.c -lpthread -lrt && ./test_mac
 ```
 
 Run the tests with no other switch running.

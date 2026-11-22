@@ -1,1 +1,0 @@
-port 2 now mirroring to port 1

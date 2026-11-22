@@ -1,4 +1,0 @@
-PORT  FRAMES_IN  FRAMES_OUT  DROPPED  MIRRORED  VLAN  MODE   STATE
-0     1          1           0        0        1     access down
-1     1          0           0        0        1     access up
-2     0          0           0        0        1     access free

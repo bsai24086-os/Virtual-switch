@@ -76,6 +76,7 @@ static void stats_watch(void)
         printf("------------------------------------------------\n");
 
         pthread_mutex_lock(&stats->lock);
+
         for (int i = 0; i < stats->num_ports; i++) {
             PortCounters *p = &stats->ports[i];
             printf("%-5d %-10lu %-11lu %-8lu %-8lu\n",
@@ -86,6 +87,7 @@ static void stats_watch(void)
                    (unsigned long)p->frames_mirrored);
         }
         pthread_mutex_unlock(&stats->lock);
+        fflush(stdout);          /* show the table even when output is piped */
 
         sleep(1);
     }

@@ -63,8 +63,8 @@ stop
 
 # ------------------------------------------------------------------ #
 start slow_host 4
-$H $P 9 stall 8 > /dev/null & STALL=$!; sleep 0.3
-$H $P 2 recv 6 > $OUT/c2.txt & C2=$!; sleep 0.3
+$H $P 9 stall 14 > /dev/null & STALL=$!; sleep 0.3
+$H $P 2 recv 9 > $OUT/c2.txt & C2=$!; sleep 0.3
 PAYLOAD_SIZE=1400 $H $P 3 send bc 3000 1 200 > $OUT/c3.txt
 wait $C2
 ./swctl show ports > $OUT/c_ports.txt
@@ -216,7 +216,12 @@ if [ -x ./supervisor ] && [ "$SW" = ./switch ] && [ -z "$VALGRIND" ]; then
     for _ in $(seq 100); do [ "$(grep -c 'switch ready' $SLOG)" -ge 1 ] && break; sleep 0.1; done
     $H $P 1 recv 30 > /dev/null & S1=$!; sleep 0.3
     $H $P 2 recv 30 > /dev/null & S2=$!; sleep 0.3
-    ./swctl show mac > $OUT/sup_before.txt
+    # wait until both hosts are learned (a slow disk can take a while)
+    for _ in $(seq 100); do
+        ./swctl show mac > $OUT/sup_before.txt
+        [ "$(grep -c '^02:' $OUT/sup_before.txt)" -ge 2 ] && break
+        sleep 0.1
+    done
     check "before the crash both MACs are learned" "grep -q '02:00:00:00:00:01' $OUT/sup_before.txt && grep -q '02:00:00:00:00:02' $OUT/sup_before.txt"
     OLDPID=$(pgrep -P $SUP -x switch)
     kill -9 $OLDPID
