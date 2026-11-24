@@ -13,6 +13,7 @@
 #include <time.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <poll.h>
 #include <netinet/in.h>
 
 #include "logger.h"
@@ -20,6 +21,7 @@
 #include "mac_table.h"
 #include "shm_stats.h"
 #include "control.h"
+#include "instance.h"
 
 /* ------------------------------------------------------------------ */
 /*  Configuration                                                       */
@@ -49,13 +51,6 @@ static int          g_verbose     = 0;   /* VSWITCH_VERBOSE=1            */
 static sem_t        g_free_ports;
 static MacTable     mac_table;
 static ShmStats    *g_stats       = NULL;
-
-/* Lets an admin command wait until a port has really been freed.
- * Lock order: state_lock may be held while taking ports_lock (read).
- * Never take state_lock while holding ports_lock. */
-static pthread_mutex_t state_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  state_cond = PTHREAD_COND_INITIALIZER;
-
 
 static void ts_add_ms(struct timespec *t, long ms)
 {
@@ -423,22 +418,45 @@ static void tb_refill(TokenBucket *tb, int rate)
 enum { PORT_FREE = 0, PORT_UP, PORT_CLOSING };
 
 typedef struct {
-    int           fd;         /* -1 when free                        */
+    int           fd;         /* -1 when free (trunk: pipe read end) */
+    int           wfd;        /* trunk pipe write end, -1 for TCP    */
     int           state;      /* PORT_FREE / PORT_UP / PORT_CLOSING  */
     int           mirror_to;  /* sniffer port for ingress, -1 = off  */
-    PriorityQueue pq;
-    TokenBucket   tb;
     int           vlan;       /* VLAN of a normal port, 1..4094      */
     int           is_trunk;   /* 1 = carries every VLAN              */
     int           admin_down; /* swctl shutdown: accept loop skips it */
+    PriorityQueue pq;
+    TokenBucket   tb;
     pthread_t     sender_tid;
 } PortState;
 
-/* ports_lock protects fd, state and mirror_to of every port.
+/* ports_lock protects fd, state, mirror_to, vlan, is_trunk and admin_down.
  * Forwarding takes it for reading; add/remove/mirror take it for writing. */
 static PortState        ports[MAX_PORTS];
 static int              num_ports = 0;        /* fixed after startup */
 static pthread_rwlock_t ports_lock = PTHREAD_RWLOCK_INITIALIZER;
+
+/* Tier 3 trunk. shutdown() only works on sockets, so a receiver blocked
+ * reading the trunk pipe is woken by writing to this pipe instead. */
+static int g_trunk_wake[2] = { -1, -1 };
+
+/* Wake the receiver of port idx so it removes the port. Caller holds
+ * ports_lock (read or write). */
+static void port_wake(int idx)
+{
+    if (ports[idx].wfd >= 0) {
+        char c = 1;
+        if (write(g_trunk_wake[1], &c, 1) < 0) perror("write trunk wake");
+    } else {
+        shutdown(ports[idx].fd, SHUT_RDWR);
+    }
+}
+
+/* Lets an admin command wait until a port has really been freed.
+ * Lock order: state_lock may be held while taking ports_lock (read).
+ * Never take state_lock while holding ports_lock. */
+static pthread_mutex_t state_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  state_cond = PTHREAD_COND_INITIALIZER;
 
 /* Only the main thread touches these two. */
 static pthread_t handler_tid[MAX_PORTS];
@@ -533,7 +551,7 @@ int port_admin_down(int idx)
     pthread_rwlock_wrlock(&ports_lock);
     ports[idx].admin_down = 1;
     if (ports[idx].state == PORT_UP)
-        shutdown(ports[idx].fd, SHUT_RDWR);        /* wakes the receiver */
+        port_wake(idx);                            /* wakes the receiver */
     pthread_rwlock_unlock(&ports_lock);
 
     int ok = wait_port_free(idx);
@@ -618,13 +636,15 @@ static void *sender_thread(void *arg)
         Frame tmp;
         tmp.header  = sf->header;
         tmp.payload = sf->payload;
-        int w = frame_write(p->fd, &tmp);
+        int w = frame_write(p->wfd >= 0 ? p->wfd : p->fd, &tmp);
         shared_frame_unref(sf);
 
         if (w < 0) {
             /* host gone (EPIPE): wake our receiver so it removes the port */
             log_push("port %d: write failed, closing", idx);
-            shutdown(p->fd, SHUT_RDWR);
+            pthread_rwlock_rdlock(&ports_lock);
+            port_wake(idx);
+            pthread_rwlock_unlock(&ports_lock);
             break;
         }
         shm_inc_out(g_stats, idx);
@@ -636,8 +656,9 @@ static void *sender_thread(void *arg)
 /*  Port add / remove                                                   */
 /* ------------------------------------------------------------------ */
 
-/* Returns the port index, or -1. Caller owns fd on failure. */
-static int port_add(int fd)
+/* Returns the port index, or -1. Caller owns fd on failure.
+ * wfd >= 0 makes it the trunk port (fd = pipe read end). */
+static int port_add(int fd, int wfd)
 {
     int idx = -1;
 
@@ -653,6 +674,8 @@ static int port_add(int fd)
     if (idx != -1) {
         tb_reset(&ports[idx].tb);
         ports[idx].fd        = fd;
+        ports[idx].wfd       = wfd;
+        if (wfd >= 0) ports[idx].is_trunk = 1;
         ports[idx].mirror_to = -1;
         ports[idx].state     = PORT_UP;
     }
@@ -668,6 +691,7 @@ static int port_add(int fd)
         pq_reset(&ports[idx].pq);
         pthread_rwlock_wrlock(&ports_lock);
         ports[idx].fd    = -1;
+        ports[idx].wfd   = -1;
         ports[idx].state = PORT_FREE;
         pthread_rwlock_unlock(&ports_lock);
         return -1;
@@ -714,11 +738,15 @@ static void port_remove(int idx)
 
     pthread_rwlock_wrlock(&ports_lock);
     int fd   = p->fd;
+    int wfd  = p->wfd;
     p->fd    = -1;
+    p->wfd   = -1;
+    if (wfd >= 0) p->is_trunk = 0;           /* the pipe trunk is gone */
     p->state = PORT_FREE;
     pthread_rwlock_unlock(&ports_lock);
 
     if (close(fd) < 0) perror("close port fd");
+    if (wfd >= 0 && close(wfd) < 0) perror("close trunk wfd");
 
     printf("[port %d] removed, dropped=%lu aged=%lu\n",
            idx, (unsigned long)dropped, (unsigned long)aged);
@@ -735,6 +763,7 @@ static void port_remove(int idx)
 /* ------------------------------------------------------------------ */
 /*  Forwarding                                                          */
 /* ------------------------------------------------------------------ */
+
 /* Caller holds ports_lock for reading. Never blocks. */
 static int enqueue_to(int i, SharedFrame *sf)
 {
@@ -819,6 +848,7 @@ static void *port_handler(void *arg)
 {
     int idx = (int)(intptr_t)arg;
     int fd  = ports[idx].fd;     /* stable until we call port_remove */
+    int is_pipe = ports[idx].wfd >= 0;   /* Tier 3 trunk */
 
     printf("[port %d] host connected (fd=%d)\n", idx, fd);
     log_push("port %d: host connected", idx);
@@ -826,6 +856,22 @@ static void *port_handler(void *arg)
     for (;;) {
         Frame frame;
         frame.payload = NULL;
+
+        if (is_pipe) {               /* wait for data or a wake-up */
+            struct pollfd pf[2] = {
+                { .fd = fd,              .events = POLLIN },
+                { .fd = g_trunk_wake[0], .events = POLLIN },
+            };
+            if (poll(pf, 2, -1) < 0) {
+                if (errno == EINTR) continue;
+                perror("trunk poll");
+                break;
+            }
+            if (pf[1].revents) {
+                log_push("port %d: trunk closed", idx);
+                break;
+            }
+        }
 
         int r = frame_read(fd, &frame);
         if (r == 0) {
@@ -845,7 +891,9 @@ static void *port_handler(void *arg)
             frame_print(&frame);
         }
 
-        if (mac_table_learn(&mac_table, frame.header.src, idx) < 0) {
+        /* the trunk carries every host of the other switch, so it is
+         * not shut by port security; extra MACs are just not learned */
+        if (mac_table_learn(&mac_table, frame.header.src, idx) < 0 && !is_pipe) {
             printf("[port %d] port security: too many MACs, shutting port\n", idx);
             log_push("port %d: port security triggered, port shut down", idx);
             free(frame.payload);
@@ -867,6 +915,7 @@ static void *port_handler(void *arg)
 /* ------------------------------------------------------------------ */
 /*  Signal thread (item 12)                                             */
 /* ------------------------------------------------------------------ */
+
 static void dump_mac_table(void)
 {
     const char *path = "mac_dump.txt";
@@ -925,7 +974,7 @@ static void *signal_thread(void *arg)
         pthread_rwlock_rdlock(&ports_lock);      /* wakes every read */
         for (int i = 0; i < num_ports; i++)
             if (ports[i].fd != -1)
-                shutdown(ports[i].fd, SHUT_RDWR);
+                port_wake(i);
         pthread_rwlock_unlock(&ports_lock);
 
         sem_post(&g_free_ports);                 /* wakes sem_timedwait */
@@ -947,6 +996,7 @@ static int parse_int(const char *s, int lo, int hi, int *out)
     *out = (int)v;
     return 0;
 }
+
 int main(int argc, char *argv[])
 {
     int tcp_port;
@@ -1024,6 +1074,7 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i < num_ports; i++) {
         ports[i].fd        = -1;
+        ports[i].wfd       = -1;
         ports[i].state     = PORT_FREE;
         ports[i].mirror_to = -1;
         ports[i].vlan      = 1;
@@ -1045,7 +1096,9 @@ int main(int argc, char *argv[])
     /* under the supervisor (VSWITCH_PERSIST=1) the MAC table outlives a crash */
     const char *persist_env = getenv("VSWITCH_PERSIST");
     int persist = persist_env != NULL && strcmp(persist_env, "1") == 0;
-    if (mac_table_init(&mac_table, MAC_SHM_NAME, persist) != 0) {
+    char macname[64];
+    if (mac_table_init(&mac_table, inst_name(MAC_SHM_NAME, macname, sizeof(macname)),
+                       persist) != 0) {
         fprintf(stderr, "[switch] failed to create MAC table\n");
         return 1;
     }
@@ -1070,6 +1123,28 @@ int main(int argc, char *argv[])
     if (control_start(&ctrl_ctx) != 0) {
         fprintf(stderr, "[switch] failed to start control thread\n");
         return 1;
+    }
+
+    /* Tier 3: twoswitch passes the trunk pipe ends in VSWITCH_TRUNK="r,w" */
+    const char *trunk_env = getenv("VSWITCH_TRUNK");
+    if (trunk_env != NULL) {
+        int rfd, wfd;
+        if (sscanf(trunk_env, "%d,%d", &rfd, &wfd) != 2 || rfd < 0 || wfd < 0) {
+            fprintf(stderr, "bad VSWITCH_TRUNK \"%s\"\n", trunk_env);
+            return 1;
+        }
+        if (pipe(g_trunk_wake) < 0) { perror("pipe trunk wake"); return 1; }
+        if (sem_wait(&g_free_ports) < 0) { perror("sem_wait"); return 1; }
+        int tidx = port_add(rfd, wfd);
+        if (tidx < 0) { fprintf(stderr, "no port for the trunk\n"); return 1; }
+        if (pthread_create(&handler_tid[tidx], NULL, port_handler,
+                           (void *)(intptr_t)tidx) != 0) {
+            perror("pthread_create trunk");
+            return 1;
+        }
+        handler_joinable[tidx] = 1;
+        printf("[port %d] trunk to the other switch (pipes r=%d w=%d)\n",
+               tidx, rfd, wfd);
     }
 
     printf("switch ready on TCP %d, %d ports, rate_limit=%d\n",
@@ -1112,7 +1187,7 @@ int main(int argc, char *argv[])
             break;
         }
 
-        int idx = port_add(client_fd);
+        int idx = port_add(client_fd, -1);
         if (idx == -1) {
             /* every free port is shut down by the admin: nothing to wait for */
             const char *msg = "switch full\n";
@@ -1177,6 +1252,7 @@ int main(int argc, char *argv[])
 
     shm_stats_close(g_stats);
     shm_stats_unlink();
+    if (g_trunk_wake[0] >= 0) { close(g_trunk_wake[0]); close(g_trunk_wake[1]); }
 
     printf("[switch] shutdown complete\n");
     return 0;

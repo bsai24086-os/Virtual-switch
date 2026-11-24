@@ -259,3 +259,5 @@ int main(void)
     fprintf(stderr, "test_mac (lock mode %d): %d passed, %d failed\n", MAC_LOCK_MODE, passed, failed);
     return failed ? 1 : 0;
 }
+
+

@@ -377,6 +377,7 @@ int mac_table_learn(MacTable *t, const uint8_t mac[6], int port_idx)
 
     log_push("learned %02x:%02x:%02x:%02x:%02x:%02x on port %d",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], port_idx);
+    
     return 0;
 }
 

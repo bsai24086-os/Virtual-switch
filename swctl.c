@@ -9,6 +9,7 @@
 
 #include "shm_stats.h"
 #include "control.h"
+#include "instance.h"
 
 /* --- send a command over the UNIX socket and print the response --- */
 static int send_command(const char *cmd)
@@ -26,7 +27,8 @@ static int send_command(const char *cmd)
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, CTRL_SOCK_PATH, sizeof(addr.sun_path) - 1);
+    char pbuf[100];
+    strncpy(addr.sun_path, inst_name(CTRL_SOCK_PATH, pbuf, sizeof(pbuf)), sizeof(addr.sun_path) - 1);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("connect — is the switch running?");
@@ -76,7 +78,6 @@ static void stats_watch(void)
         printf("------------------------------------------------\n");
 
         pthread_mutex_lock(&stats->lock);
-
         for (int i = 0; i < stats->num_ports; i++) {
             PortCounters *p = &stats->ports[i];
             printf("%-5d %-10lu %-11lu %-8lu %-8lu\n",
@@ -106,7 +107,11 @@ int main(int argc, char *argv[])
             "  clear mac\n"
             "  stats\n"
             "  stats --watch\n"
-            "  mirror <src_port> <sniffer_port|off>\n");
+            "  mirror <src_port> <sniffer_port|off>\n"
+            "  shutdown <port>\n"
+            "  up <port>\n"
+            "  vlan <port> <vlan>\n"
+            "  trunk <port> <on|off>\n");
         return 1;
     }
 

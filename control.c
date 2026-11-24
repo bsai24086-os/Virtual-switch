@@ -14,6 +14,13 @@
 #include <sys/un.h>
 
 #include "control.h"
+#include "instance.h"
+
+static const char *sock_path(void)
+{
+    static char buf[100];
+    return inst_name(CTRL_SOCK_PATH, buf, sizeof(buf));
+}
 #include "shm_stats.h"
 #include "mac_table.h"
 #include "logger.h"
@@ -30,7 +37,7 @@ static ControlContext g_ctx;
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    char buf[CTRL_BUF_SIZE * 256];   /* 64 KB: room for 1024 MAC entries */
+    char   buf[CTRL_BUF_SIZE * 256];   /* 64 KB: room for 1024 MAC entries */
     size_t len;
 } Reply;
 
@@ -45,6 +52,7 @@ static void reply_add(Reply *r, const char *fmt, ...)
     r->len += (size_t)n;
     if (r->len > sizeof(r->buf) - 1) r->len = sizeof(r->buf) - 1;
 }
+
 /* with_info = 1 adds VLAN, MODE and STATE columns at the end. */
 static void reply_ports(Reply *r, int with_info)
 {
@@ -84,6 +92,7 @@ static int parse_num(const char *s, long lo, long hi, int *out)
 /* ------------------------------------------------------------------ */
 /*  Handle one swctl connection                                         */
 /* ------------------------------------------------------------------ */
+
 static void handle_client(int client_fd)
 {
     char    cmd[CTRL_BUF_SIZE];
@@ -111,9 +120,9 @@ static void handle_client(int client_fd)
 
     } else if (strcmp(cmd, "show mac") == 0) {
         static MacSnap snap[MAC_TABLE_MAX];   /* only the control thread uses it */
-        int cnt = mac_table_snapshot(g_ctx.mac_table, snap, MAC_TABLE_MAX);
+        int n = mac_table_snapshot(g_ctx.mac_table, snap, MAC_TABLE_MAX);
         reply_add(&r, "%-20s %-6s %s\n", "MAC", "PORT", "AGE(s)");
-        for (int i = 0; i < cnt; i++)
+        for (int i = 0; i < n; i++)
             reply_add(&r, "%02x:%02x:%02x:%02x:%02x:%02x    %-6d %ld\n",
                       snap[i].mac[0], snap[i].mac[1], snap[i].mac[2],
                       snap[i].mac[3], snap[i].mac[4], snap[i].mac[5],
@@ -200,6 +209,7 @@ static void handle_client(int client_fd)
         off += (size_t)w;
     }
 }
+
 /* ------------------------------------------------------------------ */
 /*  Control thread: poll the listening socket and the wake-up pipe      */
 /* ------------------------------------------------------------------ */
@@ -246,14 +256,14 @@ int control_start(ControlContext *ctx)
 
     g_ctx = *ctx;
 
-    unlink(CTRL_SOCK_PATH);                 /* stale socket from a crash */
+    unlink(sock_path());                 /* stale socket from a crash */
 
     g_server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (g_server_fd < 0) { perror("control socket"); return -1; }
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, CTRL_SOCK_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, sock_path(), sizeof(addr.sun_path) - 1);
 
     if (bind(g_server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("control bind");
@@ -274,13 +284,13 @@ int control_start(ControlContext *ctx)
         goto fail;
     }
     g_ctrl_running = 1;
-    printf("[control] listening on %s\n", CTRL_SOCK_PATH);
+    printf("[control] listening on %s\n", sock_path());
     return 0;
 
 fail:
     close(g_server_fd);
     g_server_fd = -1;
-    unlink(CTRL_SOCK_PATH);
+    unlink(sock_path());
     return -1;
 }
 
@@ -297,6 +307,6 @@ void control_stop(void)
     close(g_wake[1]);
     close(g_server_fd);
     g_server_fd = -1;
-    unlink(CTRL_SOCK_PATH);
+    unlink(sock_path());
     printf("[control] stopped, socket removed\n");
 }

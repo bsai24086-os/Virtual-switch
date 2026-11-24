@@ -10,6 +10,13 @@
 #include <pthread.h>
 
 #include "shm_stats.h"
+#include "instance.h"
+
+static const char *shm_name(void)
+{
+    static char buf[64];
+    return inst_name(SHM_NAME, buf, sizeof(buf));
+}
 
 ShmStats *shm_stats_create(int num_ports)
 {
@@ -18,9 +25,9 @@ ShmStats *shm_stats_create(int num_ports)
 
     /* create the shared memory object — O_CREAT|O_EXCL fails if
        it already exists, so unlink first just in case */
-    shm_unlink(SHM_NAME);
+    shm_unlink(shm_name());
 
-    fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0600);
+    fd = shm_open(shm_name(), O_CREAT | O_RDWR, 0600);
     if (fd < 0) {
         perror("shm_open create");
         return NULL;
@@ -30,7 +37,7 @@ ShmStats *shm_stats_create(int num_ports)
     if (ftruncate(fd, sizeof(ShmStats)) < 0) {
         perror("ftruncate");
         close(fd);
-        shm_unlink(SHM_NAME);
+        shm_unlink(shm_name());
         return NULL;
     }
 
@@ -41,7 +48,7 @@ ShmStats *shm_stats_create(int num_ports)
 
     if (stats == MAP_FAILED) {
         perror("mmap create");
-        shm_unlink(SHM_NAME);
+        shm_unlink(shm_name());
         return NULL;
     }
 
@@ -56,7 +63,7 @@ ShmStats *shm_stats_create(int num_ports)
     pthread_mutex_init(&stats->lock, &attr);
     pthread_mutexattr_destroy(&attr);
 
-    printf("[shm] created %s, %zu bytes\n", SHM_NAME, sizeof(ShmStats));
+    printf("[shm] created %s, %zu bytes\n", shm_name(), sizeof(ShmStats));
     return stats;
 }
 
@@ -66,7 +73,7 @@ ShmStats *shm_stats_open(void)
     ShmStats *stats;
 
     /* open existing shared memory — do not create */
-    fd = shm_open(SHM_NAME, O_RDWR, 0600);
+    fd = shm_open(shm_name(), O_RDWR, 0600);
     if (fd < 0) {
         perror("shm_open open");
         return NULL;
@@ -92,8 +99,8 @@ void shm_stats_close(ShmStats *stats)
 
 void shm_stats_unlink(void)
 {
-    shm_unlink(SHM_NAME);
-    printf("[shm] unlinked %s\n", SHM_NAME);
+    shm_unlink(shm_name());
+    printf("[shm] unlinked %s\n", shm_name());
 }
 
 /* --- counter helpers --- */

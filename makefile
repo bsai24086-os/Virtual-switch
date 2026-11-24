@@ -2,19 +2,19 @@ CC      = gcc
 CFLAGS  = -std=c11 -Wall -Wextra -Werror -g -O0
 LDLIBS  = -lpthread -lrt
 
-PROGS = switch host swctl test_frame test_shm testhost supervisor \
+PROGS = switch host swctl test_frame test_shm testhost supervisor twoswitch \
         bench_global bench_striped bench_rwlock
 SWITCH_SRCS = switch.c frame.c mac_table.c shm_stats.c control.c logger.c
 
 all: $(PROGS)
 
-switch: $(SWITCH_SRCS) frame.h mac_table.h shm_stats.h control.h logger.h
+switch: $(SWITCH_SRCS) frame.h mac_table.h shm_stats.h control.h logger.h instance.h
 	$(CC) $(CFLAGS) -o $@ $(SWITCH_SRCS) $(LDLIBS)
 
 host: host.c frame.c frame.h
 	$(CC) $(CFLAGS) -o $@ host.c frame.c $(LDLIBS)
 
-swctl: swctl.c shm_stats.c shm_stats.h control.h
+swctl: swctl.c shm_stats.c shm_stats.h control.h instance.h
 	$(CC) $(CFLAGS) -o $@ swctl.c shm_stats.c $(LDLIBS)
 
 test_frame: test_frame.c frame.c frame.h
@@ -31,6 +31,9 @@ tsan: switch_tsan
 
 clean:
 	rm -f $(PROGS) switch_tsan bench_tsan_*
+
+twoswitch: twoswitch.c
+	$(CC) $(CFLAGS) -o $@ twoswitch.c $(LDLIBS)
 
 supervisor: supervisor.c
 	$(CC) $(CFLAGS) -o $@ supervisor.c $(LDLIBS)

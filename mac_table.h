@@ -7,7 +7,7 @@
 
 #define MAC_TABLE_BUCKETS  64     /* number of hash buckets              */
 #define MAC_TABLE_MAX      1024   /* max total entries (LRU eviction)    */
-#define MAC_PORT_MAX_MACS  10     /* max MACs per port (port security)   */
+#define MAC_PORT_MAX_MACS  10    /* max MACs per port (port security)   */
 #define MAC_AGING_SECS     30     /* remove entries older than this      */
 #define MAC_SHM_NAME       "/vswitch_mac"
 
