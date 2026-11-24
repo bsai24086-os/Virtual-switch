@@ -97,7 +97,7 @@ Reload without restarting: `kill -HUP <switch_pid>`.
 | Path | Content |
 | --- | --- |
 | `/tmp/vswitch.log` | Log file, written by the logger thread |
-| `/tmp/vswitch.sock` | Control socket for swctl |
+| `/tmp/vswitch.sock` | Control socket for swctl (`_a` / `_b` added under twoswitch) |
 | `/dev/shm/vswitch_stats` | Shared-memory counters |
 | `/dev/shm/vswitch_mac` | Shared-memory MAC table (kept across a crash under the supervisor) |
 | `mac_dump.txt` | MAC table dump written on SIGUSR1, in the current directory |
@@ -116,6 +116,33 @@ than 5 crashes within 10 seconds also stops it.
 
 Try it: start `./supervisor 9000 4`, connect a host, run `pkill -9 -x switch`,
 then `./swctl show mac`. The table is still filled.
+
+## Two switches (trunk)
+
+```
+./twoswitch <tcp_port_a> <tcp_port_b> <num_ports> [switch_binary]
+```
+
+Starts two switch processes joined by two pipes, like `two_way.c` from
+Lab 05: pipe ab carries frames from A to B and pipe ba from B to A. In each
+switch, port 0 is its end of the trunk. It carries every VLAN and the frame
+keeps its VLAN number across the link. Hosts connect to A on the first TCP
+port and to B on the second, and get ports 1 and up. Each switch learns the
+other switch's hosts on port 0.
+
+The two switches are named `a` and `b` (`VSWITCH_NAME`), so each has its own
+control socket and shared memory, for example `/tmp/vswitch.sock_a`. Talk to
+one with `VSWITCH_NAME=a ./swctl show mac`. Output is printed with an `A|` or
+`B|` prefix. Ctrl+C stops both. If one switch dies, the other removes its
+trunk port and keeps working.
+
+The trunk port is not shut by port security, because it carries all hosts of
+the other switch.
+
+```
+./t3_test.sh                   # 24 checks for the two-switch setup
+./t3_test.sh ./switch_tsan     # the same under ThreadSanitizer
+```
 
 ## Benchmark
 
@@ -146,4 +173,4 @@ Run the tests with no other switch running.
 
 - Port security can briefly exceed its limit by one MAC.
 - The MAC table is keyed by MAC only, not by MAC and VLAN.
-- Tier 3 is not implemented.
+- Two switches only, joined by one trunk. There is no loop protection.
